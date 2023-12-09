@@ -1,0 +1,65 @@
+public class fileUploadBatch implements Database.Batchable<sObject>, Database.AllowsCallouts {
+    public Database.QueryLocator start(Database.BatchableContext bc){
+        system.debug('INSIDE START');
+        return database.getQueryLocator([select Id, FileExtension, FileType, Title, ContentDocumentId, FileUpload__c, VersionData from ContentVersion where FileUpload__c = false and isLargeFile__c = false]);
+        //return database.getQueryLocator([select Id, FileExtension, FileType, Title, ContentDocumentId, FileUpload__c, VersionData from ContentVersion WHERE title LIKE '%Laboratory\'s Employee%']);
+    }
+    
+    public void execute(Database.BatchableContext bc, List<contentVersion> records){
+        system.debug('INSIDE EXECUTE');
+        map<id, contentVersion> contentDocToContentVersionMap = new map<id, contentVersion>();
+        set<id> contentDocumentIdList = new set<id>();
+        for(contentVersion cv: records){
+            contentDocumentIdList.add(cv.ContentDocumentId);
+            contentDocToContentVersionMap.put(cv.ContentDocumentId, cv);
+        }
+        
+        for(ContentDocumentLink cdl: [select id,ContentDocumentId, LinkedEntityId from ContentDocumentLink where ContentDocumentId IN :contentDocumentIdList]){
+            Id parentRecordID = cdl.linkedEntityId;
+            Id contDocId = cdl.contentDocumentId;
+            contentVersion cv = contentDocToContentVersionMap.get(contDocId);
+            if(cv != null){
+                system.debug('Calling fileUploadHandler.sendFileToGD');
+                system.debug('cv.title -> ' + cv.title);
+                system.debug('parentRecordId -> ' + parentRecordId);
+                String objectName = parentRecordId.getSobjectType().getDescribe().getLabel().toLowerCase();
+                system.debug('objectName -> ' + objectName);
+                if(objectName.contains('hemp') || objectName.contains('cannabis') || objectName.contains('orgaic')){
+                    try{
+                        fileUploadHandler.sendFileToGD(parentRecordId, cv);
+                    }catch(exception e){
+                        system.debug('ERROR: ' + e.getMessage());
+                    }
+                }
+            }
+        }
+        
+    }
+    
+    public void finish(Database.BatchableContext bc){
+        // DELETE uploaded files
+        system.debug('INSIDE FINISH');
+        list<id> contentDocsToDeleteId = new list<id>();
+        for(contentVersion fileContentVersion: [select Id, FileExtension, FileType, Title, ContentDocumentId, FileUpload__c, VersionData from ContentVersion where FileUpload__c = true and isLargeFile__c = false]){
+            String fileName = fileContentVersion.title;
+            if(!fileName.contains('Signature')){
+                contentDocsToDeleteId.add(fileContentVersion.ContentDocumentId);    
+            }
+        }
+        
+        if(contentDocsToDeleteId.size() > 0 && contentDocsToDeleteId.isEmpty() == false){
+            list<contentDocument> contentDocs = [SELECT Id FROM ContentDocument WHERE ID IN:contentDocsToDeleteId];
+            database.DeleteResult[] deleteResult = database.delete(contentDocs, false);
+            for(database.DeleteResult dr: deleteResult){
+                if(dr.isSuccess()){
+                    system.debug('DELETED -> ' + dr.getId());
+                }else{
+                    system.debug('ERROR while deleting' + dr.getId());
+                    system.debug(json.serializePretty(dr.getErrors()));
+                }
+            }
+        }
+        
+    }
+
+}
